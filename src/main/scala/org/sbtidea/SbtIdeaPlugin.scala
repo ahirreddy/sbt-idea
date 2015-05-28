@@ -86,9 +86,9 @@ object SbtIdeaPlugin extends Plugin {
       settings.optionalSetting(ideaIgnoreModule, projectRef).getOrElse(false)
 
     val allProjectIds = projectList.values.map(_.id).toSet
-    val subProjects = projectList.collect {
+    val subProjects = projectList.par.collect {
       case (projRef, project) if (!ignoreModule(projRef)) => projectData(projRef, project, buildStruct, state, args, allProjectIds, buildUnit.localBase)
-    }.toList
+    }.toSeq.toList
 
     val scalaInstances = subProjects.map(_.scalaInstance).distinct
     val scalaLibs = (sbtInstance :: scalaInstances).map(toIdeaLib(_))

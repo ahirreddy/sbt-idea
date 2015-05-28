@@ -7,7 +7,7 @@ object SbtIdeaBuild extends Build with BuildExtra {
   lazy val mainSettings: Seq[Project.Setting[_]] = Defaults.defaultSettings ++ ScriptedPlugin.scriptedSettings ++ Seq(
     sbtPlugin := true,
     organization := "com.github.mpeltonen",
-    name := "sbt-idea",
+    name := "sbt-idea-db",
     version := "1.7.0-SNAPSHOT",
     sbtVersion in Global := "0.13.2",
     scalaVersion in Global := "2.10.3",
