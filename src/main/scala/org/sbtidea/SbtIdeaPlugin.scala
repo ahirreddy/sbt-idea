@@ -12,6 +12,7 @@ object SbtIdeaPlugin extends Plugin {
   val ideaProjectName = SettingKey[String]("idea-project-name")
   val ideaProjectGroup = SettingKey[String]("idea-project-group")
   val ideaIgnoreModule = SettingKey[Boolean]("idea-ignore-module")
+  val ideaIgnoreSourceGen = SettingKey[Boolean]("idea-ignore-source-gen")
   val ideaBasePackage = SettingKey[Option[String]]("idea-base-package", "The base package configured in the Scala Facet, used by IDEA to generated nested package clauses. For example, com.acme.wibble")
   val ideaPackagePrefix = SettingKey[Option[String]]("idea-package-prefix",
                                                      "The package prefix for source directories.")
@@ -85,9 +86,12 @@ object SbtIdeaPlugin extends Plugin {
     def ignoreModule(projectRef: ProjectRef): Boolean =
       settings.optionalSetting(ideaIgnoreModule, projectRef).getOrElse(false)
 
+    def ignoreSourceGen(projectRef: ProjectRef): Boolean =
+      settings.optionalSetting(ideaIgnoreSourceGen, projectRef).getOrElse(false)
+
     val allProjectIds = projectList.values.map(_.id).toSet
     val subProjects = projectList.collect {
-      case (projRef, project) if (!ignoreModule(projRef)) => projectData(projRef, project, buildStruct, state, args, allProjectIds, buildUnit.localBase)
+      case (projRef, project) if (!ignoreModule(projRef)) => projectData(projRef, project, buildStruct, state, args, allProjectIds, buildUnit.localBase, ignoreSourceGen(projRef))
     }.toList
 
     val scalaInstances = subProjects.map(_.scalaInstance).distinct
@@ -151,7 +155,8 @@ object SbtIdeaPlugin extends Plugin {
   }
 
   def projectData(projectRef: ProjectRef, project: ResolvedProject, buildStruct: BuildStructure,
-                  state: State, args: Seq[String], allProjectIds: Set[String], projectRoot: File): SubProjectInfo = {
+                  state: State, args: Seq[String], allProjectIds: Set[String], projectRoot: File,
+                  ignoreSourceGen: Boolean): SubProjectInfo = {
 
     val settings = Settings(projectRef, buildStruct, state)
 
@@ -168,7 +173,7 @@ object SbtIdeaPlugin extends Plugin {
 
     def sourceDirectoriesFor(config: Configuration) = {
       val hasSourceGen = settings.optionalSetting(Keys.sourceGenerators in config).exists(!_.isEmpty)
-      val managedSourceDirs = if (hasSourceGen) {
+      val managedSourceDirs = if (hasSourceGen && !ignoreSourceGen) {
         state.log.info("Running " + config.name + ":" + Keys.managedSources.key.label + " ...")
         EvaluateTask(buildStruct, Keys.managedSources in config, state, projectRef)
         val managedSourceRoots = settings.setting(Keys.managedSourceDirectories in config, "Missing managed source directories!")
@@ -210,7 +215,7 @@ object SbtIdeaPlugin extends Plugin {
     }
     val testDirectories: Directories = appendExtraTestDirectories(directoriesFor(Configurations.Test))
     val librariesExtractor = new SbtIdeaModuleMapping.LibrariesExtractor(buildStruct, state, projectRef, scalaInstance,
-      withClassifiers = if (args.contains(NoClassifiers)) None else {
+      withClassifiers = if (args.contains(NoClassifiers) || ignoreSourceGen) None else {
         Some((settings.setting(ideaSourcesClassifiers, "Missing idea-sources-classifiers"), settings.setting(ideaJavadocsClassifiers, "Missing idea-javadocs-classifiers")))
       }
     )
@@ -237,11 +242,15 @@ object SbtIdeaPlugin extends Plugin {
     }
 
     val androidSupport = AndroidSupport(project, projectRoot, buildStruct, settings)
-    val dependencyLibs = librariesExtractor.allLibraries.map { lib: IdeaModuleLibRef =>
-      // If this is Android project, change scope of android.jar and Scala library to provided,
-      // to prevent IDEA from dexing them when running.
-      def shouldNotDex(libName: String) = libName.equals("android.jar") || libName.contains(":scala-library:")
-      if (androidSupport.isDefined && shouldNotDex(lib.library.name)) lib.copy(config = IdeaLibrary.ProvidedScope) else lib
+    val dependencyLibs = if (ignoreSourceGen) {
+      Seq.empty
+    } else {
+      librariesExtractor.allLibraries.map { lib: IdeaModuleLibRef =>
+        // If this is Android project, change scope of android.jar and Scala library to provided,
+        // to prevent IDEA from dexing them when running.
+        def shouldNotDex(libName: String) = libName.equals("android.jar") || libName.contains(":scala-library:")
+        if (androidSupport.isDefined && shouldNotDex(lib.library.name)) lib.copy(config = IdeaLibrary.ProvidedScope) else lib
+      }
     }
 
     SubProjectInfo(baseDirectory, projectName, dependencyProjects, classpathDeps, compileDirectories,
