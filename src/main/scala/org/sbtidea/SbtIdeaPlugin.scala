@@ -90,7 +90,7 @@ object SbtIdeaPlugin extends Plugin {
       settings.optionalSetting(ideaIgnoreSourceGen, projectRef).getOrElse(false)
 
     val allProjectIds = projectList.values.map(_.id).toSet
-    val subProjects = projectList.collect {
+    val subProjects = projectList.par.collect {
       case (projRef, project) if (!ignoreModule(projRef)) => projectData(projRef, project, buildStruct, state, args, allProjectIds, buildUnit.localBase, ignoreSourceGen(projRef))
     }.toList
 
@@ -164,12 +164,52 @@ object SbtIdeaPlugin extends Plugin {
     // IDEA project name, and for multi-module projects, the id as it must be consistent with the value of SubProjectInfo#dependencyProjects.
     val projectName = if (allProjectIds.size == 1) settings.setting(Keys.name, "Missing project name") else project.id
 
-    state.log.info("Creating IDEA module for project '" + projectName + "' ...")
+    val baseDirectory = settings.setting(Keys.baseDirectory, "Missing base directory!")
+
+    def isAggregate(p: String) = allProjectIds(p)
+
+    val dependencyProjects = {
+      val dependencies = project.dependencies.collect {
+        case p if isAggregate(p.project.project) =>
+          DependencyProject(p.project.project, IdeaLibrary.Scope(p.configuration getOrElse "compile"))
+      }
+      val aggregates = project.aggregate.collect {
+        case p if isAggregate(p.project) && dependencies.forall(_.name != p.project) =>
+          DependencyProject(p.project, IdeaLibrary.CompileScope)
+      }
+      (aggregates ++ dependencies).toList
+    }
+
+    val classpathDeps = project.dependencies.filterNot(d => isAggregate(d.project.project)).flatMap { dep =>
+      Seq(Compile, Test) map { scope =>
+        (settings.setting(Keys.classDirectory in scope, "Missing class directory", dep.project), settings.setting(Keys.sourceDirectories in scope, "Missing source directory", dep.project))
+      }
+    }
 
     val ideaGroup = settings.optionalSetting(ideaProjectGroup)
     val scalaInstance: ScalaInstance = settings.task(Keys.scalaInstance)
     val scalacOptions: Seq[String] = settings.optionalTask(Keys.scalacOptions in Compile).getOrElse(Seq())
-    val baseDirectory = settings.setting(Keys.baseDirectory, "Missing base directory!")
+
+    val basePackage = settings.setting(ideaBasePackage, "missing IDEA base package")
+    val packagePrefix = settings.setting(ideaPackagePrefix, "missing package prefix")
+    val extraFacets = settings.settingWithDefault(ideaExtraFacets, NodeSeq.Empty)
+    val includeScalaFacet = settings.settingWithDefault(ideaIncludeScalaFacet, true)
+    val androidSupport = AndroidSupport(project, projectRoot, buildStruct, settings)
+
+    if (ignoreSourceGen) {
+      val compileDirectories = Directories(
+        Seq.empty,
+        Seq.empty,
+        settings.setting(Keys.classDirectory in Configurations.Compile, "Missing class directory!"))
+      val testDirectories = compileDirectories
+      val dependencyLibs = Seq.empty
+
+      return SubProjectInfo(baseDirectory, projectName, dependencyProjects, classpathDeps,
+        compileDirectories, testDirectories, dependencyLibs, scalaInstance, ideaGroup, None,
+        basePackage, packagePrefix, extraFacets, scalacOptions, includeScalaFacet, androidSupport)
+    }
+
+    state.log.info("Creating IDEA module for project '" + projectName + "' ...")
 
     def sourceDirectoriesFor(config: Configuration) = {
       val hasSourceGen = settings.optionalSetting(Keys.sourceGenerators in config).exists(!_.isEmpty)
@@ -219,29 +259,7 @@ object SbtIdeaPlugin extends Plugin {
         Some((settings.setting(ideaSourcesClassifiers, "Missing idea-sources-classifiers"), settings.setting(ideaJavadocsClassifiers, "Missing idea-javadocs-classifiers")))
       }
     )
-    val basePackage = settings.setting(ideaBasePackage, "missing IDEA base package")
-    val packagePrefix = settings.setting(ideaPackagePrefix, "missing package prefix")
-    val extraFacets = settings.settingWithDefault(ideaExtraFacets, NodeSeq.Empty)
-    val includeScalaFacet = settings.settingWithDefault(ideaIncludeScalaFacet, true)
-    def isAggregate(p: String) = allProjectIds(p)
-    val classpathDeps = project.dependencies.filterNot(d => isAggregate(d.project.project)).flatMap { dep =>
-      Seq(Compile, Test) map { scope =>
-        (settings.setting(Keys.classDirectory in scope, "Missing class directory", dep.project), settings.setting(Keys.sourceDirectories in scope, "Missing source directory", dep.project))
-      }
-    }
-    val dependencyProjects = {
-      val dependencies = project.dependencies.collect {
-        case p if isAggregate(p.project.project) =>
-          DependencyProject(p.project.project, IdeaLibrary.Scope(p.configuration getOrElse "compile"))
-      }
-      val aggregates = project.aggregate.collect {
-        case p if isAggregate(p.project) && dependencies.forall(_.name != p.project) =>
-          DependencyProject(p.project, IdeaLibrary.CompileScope)
-      }
-      (aggregates ++ dependencies).toList
-    }
 
-    val androidSupport = AndroidSupport(project, projectRoot, buildStruct, settings)
     val dependencyLibs = if (ignoreSourceGen) {
       Seq.empty
     } else {
