@@ -90,7 +90,7 @@ object SbtIdeaPlugin extends Plugin {
       settings.optionalSetting(ideaIgnoreSourceGen, projectRef).getOrElse(false)
 
     val allProjectIds = projectList.values.map(_.id).toSet
-    val subProjects = projectList.par.collect {
+    val subProjects = projectList.collect {
       case (projRef, project) if (!ignoreModule(projRef)) => projectData(projRef, project, buildStruct, state, args, allProjectIds, buildUnit.localBase, ignoreSourceGen(projRef))
     }.toList
 
